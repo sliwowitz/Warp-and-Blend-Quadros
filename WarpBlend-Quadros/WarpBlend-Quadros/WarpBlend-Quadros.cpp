@@ -1,229 +1,448 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include "stdafx.h"
 
-#include <windows.h>
 #include <assert.h>
-#include "include/nvapi.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string>
+#include <iostream>
+#include <fstream>
+#include <streambuf>
+#include <windows.h>
+
+#include <regex>
+
+#include <Eigen\Geometry>
+
+#include "nvapi.h"
 
 #include <string>
 #include <regex>
 
-#include "getCoords.h"
-
 #include <map>
 
 #include <utility>
+#include <iostream>
 
 #include "lodepng.h"
 
 using namespace std;
+using namespace Eigen;
 
-int main(int argc, char **argv)
-{
-	NvAPI_Status error;
-	NvPhysicalGpuHandle nvGPUHandles[NVAPI_MAX_PHYSICAL_GPUS];
-	NvU32 gpuCount = 0;
-	NvU32 gpu;
-	NvU32 outputMask = 0;
+constexpr static int NUM_VERTICES = 4;
 
-	NV_SCANOUT_WARPING_DATA warpingData;
-	NvAPI_ShortString estring;
-	int maxNumVertices = 0;
-	int sticky = 0;
+struct RectCoords {
+    Vector2f tl;
+    Vector2f bl;
+    Vector2f tr;
+    Vector2f br;
 
-	// for loading blending images
-	std::vector<unsigned char> image;
-	unsigned width, height;
+};
 
-	printf("App Version: 1.2\n");
+vector<float> get_warping_vertices(float srcLeft, float srcTop, float srcWidth, float srcHeight, RectCoords tgt) {
 
-	// Initialize NVAPI, get GPU handles, etc.
-	error = NvAPI_Initialize();
-	ZeroMemory(&nvGPUHandles , sizeof(nvGPUHandles));
-	error = NvAPI_EnumPhysicalGPUs(nvGPUHandles, &gpuCount);	
+    // XYUVRW coordinates to return
+    //  (0)  ----------------- (2)
+    //       |             / |
+    //       |           /   |
+    //       |         /     |
+    //       |       /       |
+    //       |     /         |
+    //       |   /           |
+    //       | /             |
+    //   (1) ----------------- (3)
 
-	// a mapping from displayId to (row,column) location of projector
-	std::map<int,pair<int,int>> locationsOfDisplay;
-	locationsOfDisplay[0x80061082] = make_pair(0,0);
-	locationsOfDisplay[0x80061081] = make_pair(0,1);
-	locationsOfDisplay[0x80061080] = make_pair(0,2);
-	locationsOfDisplay[0x82061082] = make_pair(1,0);
-	locationsOfDisplay[0x82061081] = make_pair(1,1);
-	locationsOfDisplay[0x82061080] = make_pair(1,2);
+    float coords[] = { tgt.tl.x(), tgt.tl.y(), srcLeft, srcTop, 0.0f, 1.0f,   // 0
+            tgt.bl.x(), tgt.bl.y(), srcLeft, (srcTop + srcHeight), 0.0f, 1.0f,   // 1
+            tgt.tr.x(), tgt.tr.y(), srcWidth + srcLeft, srcTop, 0.0f, 1.0f,   // 2
+            tgt.br.x(), tgt.br.y(), srcWidth + srcLeft, (srcTop + srcHeight), 0.0f, 1.0f    // 3
+            };
 
-	// At this point we have a list of accessible physical nvidia gpus in the system.
-	// Loop over all gpus
+    vector<float> coords_vector(coords, coords + sizeof(coords) / sizeof(coords[0]));
 
-	for (gpu = 0; gpu < gpuCount; gpu++) 
-	{
-		NvU32 dispIdCount = 0;
+    return coords_vector;
+}
 
-		// Query the active physical display connected to each gpu.
-		error =  NvAPI_GPU_GetConnectedDisplayIds(nvGPUHandles[gpu], NULL, &dispIdCount, 0);
-		if((error != NVAPI_OK)||(dispIdCount ==0))
-		{
-			NvAPI_GetErrorMessage(error, estring);
-			printf("NvAPI_GPU_GetConnectedDisplayIds: %s\n", estring);
-			printf("Display count %d\n",dispIdCount);
-			return error;
-		}
+RectCoords read_warping_vertices(int desktop, int row, int col) {
 
-		NV_GPU_DISPLAYIDS* dispIds = NULL;
-		dispIds = new NV_GPU_DISPLAYIDS[dispIdCount];
-		dispIds->version = NV_GPU_DISPLAYIDS_VER;
-		
-		error = NvAPI_GPU_GetConnectedDisplayIds(nvGPUHandles[gpu],dispIds,&dispIdCount,0);
-		if(error != NVAPI_OK)
-		{
-			delete [] dispIds;
-			NvAPI_GetErrorMessage(error, estring);
-			printf("NvAPI_GPU_GetConnectedDisplayIds: %s\n", estring);
-		}
+    // read coordinates file into str
+    std::ifstream f("coords_for_warp.txt");
+    if (!f.is_open()) {
+        std::cout << "Failed to open coords file\n";
+        throw "Failed to open coords file";
+    }
+    std::string str((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
-		// Loop through all the displays
-		for (NvU32 dispIndex = 0; (dispIndex < dispIdCount) && dispIds[dispIndex].isActive; dispIndex++) 
-		{
-			NV_SCANOUT_INFORMATION scanInfo;
-			
-			ZeroMemory(&scanInfo , sizeof(NV_SCANOUT_INFORMATION));
-			scanInfo.version = NV_SCANOUT_INFORMATION_VER;
-			
-			printf("GPU %d, displayId 0x%08x\n",gpu,dispIds[dispIndex].displayId);
+    printf("Using warping:\n----------------\n%s\n----------------\n", str.c_str());
+    // extract float coordinates from text using regex
+    std::regex regex("DESKTOP: " + to_string(desktop) + " ROW: " + to_string(row) + " COL: " + to_string(col) + "\\n"
+            "\\(\\s*(\\-?[0-9]+.[0-9]+),\\s*(\\-?[0-9]+.[0-9]+)\\)\\s+"     // top left corner (x,y)
+            "\\(\\s*(\\-?[0-9]+.[0-9]+),\\s*(\\-?[0-9]+.[0-9]+)\\)\\s*\\n"// top right corner (x,y)
+            "\\(\\s*(\\-?[0-9]+.[0-9]+),\\s*(\\-?[0-9]+.[0-9]+)\\)\\s+"// bottom left corner (x,y)
+            "\\(\\s*(\\-?[0-9]+.[0-9]+),\\s*(\\-?[0-9]+.[0-9]+)\\)"// bottom right corner (x,y)
+    );
+    std::smatch match;
+    std::regex_search(str, match, regex);
 
-			// Query the desktop size and display location in it
-			error = NvAPI_GPU_GetScanoutConfigurationEx(dispIds[dispIndex].displayId, &scanInfo);
-			if(error != NVAPI_OK)
-			{
-				NvAPI_GetErrorMessage(error, estring);
-				printf("NvAPI_GPU_GetScanoutConfiguration: %s\n", estring);
-			}
-			
-			// Desktop -- the size & location of the virtual desktop in Windows, in a Mosaic this will include all displays and overalp
-			printf("DesktopRect: sX = %6d, sY = %6d, sWidth = %6d sHeight = %6d\n", scanInfo.sourceDesktopRect.sX, scanInfo.sourceDesktopRect.sY, scanInfo.sourceDesktopRect.sWidth, scanInfo.sourceDesktopRect.sHeight);
+    std::cout << "coords found:" << match.size() << std::endl;
 
-			// source Viewport -- where in the desktop this selected display is
-			printf("ViewportRect: sX = %6d, sY = %6d, sWidth = %6d sHeight = %6d\n", scanInfo.sourceViewportRect.sX, scanInfo.sourceViewportRect.sY, scanInfo.sourceViewportRect.sWidth, scanInfo.sourceViewportRect.sHeight);
+    // extract coordinates of quadrilateral corners
+    Vector2f tl = Vector2f(stof(match[1].str()), stof(match[2].str()));
+    Vector2f tr = Vector2f(stof(match[3].str()), stof(match[4].str()));
+    Vector2f bl = Vector2f(stof(match[5].str()), stof(match[6].str()));
+    Vector2f br = Vector2f(stof(match[7].str()), stof(match[8].str()));
 
-			// What resolution is the display 
-			printf("Display Scanout Rect: sX = %6d, sY = %6d, sWidth = %6d sHeight = %6d\n", scanInfo.targetViewportRect.sX, scanInfo.targetViewportRect.sY, scanInfo.targetViewportRect.sWidth, scanInfo.targetViewportRect.sHeight);
+    return RectCoords { tl, tr, bl, br };
+}
 
-			// texture coordinates
-			// Computing the texture coordinates is different if we are in Mosaic vs extended displays, so check to see if Mosaic is running
-			NV_MOSAIC_TOPO_BRIEF  topo;
-			topo.version = NVAPI_MOSAIC_TOPO_BRIEF_VER ;
+void warp_display(NV_SCANOUT_INFORMATION const &scanInfo, vector<float> const &vertices,
+        NV_SCANOUT_WARPING_DATA &warpingData) {
+    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[0], vertices[1], vertices[2], vertices[3],
+            vertices[4], vertices[5]);
+    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[6], vertices[7], vertices[8], vertices[9],
+            vertices[10], vertices[11]);
+    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[12], vertices[13], vertices[14],
+            vertices[15], vertices[16], vertices[17]);
+    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[18], vertices[19], vertices[20],
+            vertices[21], vertices[22], vertices[23]);
 
-			NV_MOSAIC_DISPLAY_SETTING dispSetting;
-			dispSetting.version = NVAPI_MOSAIC_DISPLAY_SETTING_VER ;
+    printf("Warping\n");
+    warpingData.version = NV_SCANOUT_WARPING_VER;
+    warpingData.numVertices = NUM_VERTICES;
+    warpingData.vertexFormat = NV_GPU_WARPING_VERTICE_FORMAT_TRIANGLESTRIP_XYUVRQ;
+    warpingData.textureRect = &scanInfo.sourceDesktopRect;
+    warpingData.vertices = vertices.data();
 
-			NvS32 overlapX, overlapY;
-			float srcLeft, srcTop, srcWidth, srcHeight ;
+    // This call does the Warp
+    int maxNumVertices = 0;
+    int sticky = 0;
+    auto error = NvAPI_GPU_SetScanoutWarping(dispIds[dispIndex].displayId, &warpingData, &maxNumVertices, &sticky);
+    if (error != NVAPI_OK) {
+        NvAPI_GetErrorMessage(error, estring);
+        printf("NvAPI_GPU_SetScanoutWarping: %s\n", estring);
+    }
+    if (maxNumVertices != NUM_VERTICES) {
+        std::cout << "maxNumVertices != NUM_VERTICES" << std::endl;
+    }
+    cout << "Will persist on reboot? " << (sticky ? "yes" : "no") << endl;
+}
 
-			// Query the current Mosaic topology
-			error = NvAPI_Mosaic_GetCurrentTopo(&topo, &dispSetting, &overlapX, &overlapY);
-			if(error != NVAPI_OK)
-			{
-				NvAPI_GetErrorMessage(error, estring);
-				printf("NvAPI_GPU_GetCurrentTopo: %s\n", estring);
-			}
+//TODO: interactivity possible with windows conio.h/getch(), or (better) ncurses
+void move_vertex(Vector2f &vertex) {
+    char c = ' ';
+    while (c != 'q') {
+        cout >> "Move along axis (x/y = AXIS, q = EXIT): ";
+        cin << c;
+        float& coord;
 
-			if(topo.enabled == false)
-			{
-				// Extended mode
-				// warp texture coordinates are defined in desktopRect coordinates
-				srcLeft   = (float)scanInfo.sourceDesktopRect.sX;
-				srcTop    = (float)scanInfo.sourceDesktopRect.sY;
-				srcWidth  = (float)scanInfo.sourceDesktopRect.sWidth;
-				srcHeight = (float)scanInfo.sourceDesktopRect.sHeight;	
-			}
-			else
-			{
-				// Mosaic -- we only want the pixels under the physical display here
-				printf("Mosaic is enabled\n");
-				srcLeft   = (float)scanInfo.sourceViewportRect.sX;
-				srcTop    = (float)scanInfo.sourceViewportRect.sY;
-				srcWidth  = (float)scanInfo.sourceViewportRect.sWidth;
-				srcHeight = (float)scanInfo.sourceViewportRect.sHeight;	
-			}
+        switch (c) {
+        case 'x':
+            coord = vertex.x();
+            break;
+        case 'y':
+            coord = vertex.y();
+            break;
+        default:
+            continue;
+        }
 
-			// -----------------------------------------------------------------------------
-			// WARPING
-			// -----------------------------------------------------------------------------
+        float offset = 0;
+        cout >> "Offset: ";
+        cin << offset;
 
-			int row = locationsOfDisplay[dispIds[dispIndex].displayId].first;
-			int col = locationsOfDisplay[dispIds[dispIndex].displayId].second;
+        coord += offset;
+    }
+}
 
-			printf("Warping projector at ROW: %d, COL: %d\n", row, col);
+int main(int argc, char **argv) {
+    NvAPI_Status error;
+    NvPhysicalGpuHandle nvGPUHandles[NVAPI_MAX_PHYSICAL_GPUS];
+    NvU32 gpuCount = 0;
+    NvU32 gpu;
+    NvU32 outputMask = 0;
 
-			std::vector<float> vertices = get_warping_vertices(row,col,srcLeft,srcTop,srcWidth,srcHeight);
-			int maxnumvert = 4;
+    NV_SCANOUT_WARPING_DATA warpingData;
+    NvAPI_ShortString estring;
+    int maxNumVertices = 0;
 
-			printf("vertices: %4.2f, %4.2f, %4.2f, %4.2f, %4.2f, %4.2f\n",vertices[0],vertices[1],vertices[2],vertices[3],vertices[4],vertices[5]);
-			printf("vertices: %4.2f, %4.2f, %4.2f, %4.2f, %4.2f, %4.2f\n",vertices[6],vertices[7],vertices[8],vertices[9],vertices[10],vertices[11]);
-			printf("vertices: %4.2f, %4.2f, %4.2f, %4.2f, %4.2f, %4.2f\n",vertices[12],vertices[13],vertices[14],vertices[15],vertices[16],vertices[17]);
-			printf("vertices: %4.2f, %4.2f, %4.2f, %4.2f, %4.2f, %4.2f\n",vertices[18],vertices[19],vertices[20],vertices[21],vertices[22],vertices[23]);
+    // for loading blending images
+    std::vector<unsigned char> image;
+    unsigned width, height;
 
-			warpingData.version =  NV_SCANOUT_WARPING_VER; 
-			warpingData.numVertices = maxnumvert;
-			warpingData.vertexFormat = NV_GPU_WARPING_VERTICE_FORMAT_TRIANGLESTRIP_XYUVRQ;
-			warpingData.textureRect = &scanInfo.sourceDesktopRect; 
-			warpingData.vertices = &vertices[0];
+    printf("App Version: 1.2\n");
 
-			 //This call does the Warp
-			error = NvAPI_GPU_SetScanoutWarping(dispIds[dispIndex].displayId, &warpingData, &maxNumVertices, &sticky);
-			if (error != NVAPI_OK)  
-			{ 
-				NvAPI_GetErrorMessage(error, estring);
-				printf("NvAPI_GPU_SetScanoutWarping: %s\n", estring);
-			}
+    // Initialize NVAPI, get GPU handles, etc.
+    error = NvAPI_Initialize();
+    ZeroMemory(&nvGPUHandles, sizeof(nvGPUHandles));
+    error = NvAPI_EnumPhysicalGPUs(nvGPUHandles, &gpuCount);
 
-			// -----------------------------------------------------------------------------
-			// BLENDING
-			// -----------------------------------------------------------------------------
+    //std::vector<std::vector<std::size_t>> display_ids{ {0x80061086, 0x80061087}, {0x82061086, 0x82061087} };
+    std::vector < std::size_t > known_ids { 0x80061086, 0x80061087, 0x82061086, 0x82061087 };
 
-			NV_SCANOUT_INTENSITY_DATA intensityData; 
+    // a mapping from displayId to (row,column) location of projector
+    std::map<int, pair<int, int>> locationsOfDisplay;
+    locationsOfDisplay[known_ids[0]] = make_pair(0, 0);
+    locationsOfDisplay[known_ids[1]] = make_pair(0, 1);
 
-			image.clear();
-			string blend_filename = "blend_(" + to_string(row) + ", " + to_string(col) + ").png";
-			unsigned lodePng_error = lodepng::decode(image, width, height, blend_filename);
-            if(lodePng_error) printf("LODEPNG ERROR %s\n ", lodepng_error_text(lodePng_error));
+    locationsOfDisplay[known_ids[2]] = make_pair(1, 0);
+    locationsOfDisplay[known_ids[3]] = make_pair(1, 1);
 
-			// copy values from png, skip every 4th value - we don't want the alpha channel
-			std::vector<float> intensityTexture_vec;
-			for(int i=0; i<image.size(); i++){
-				if ((i+1)%4 != 0){
-					intensityTexture_vec.push_back(image[i] / 255.0f);
-				}
-			}
+    for (auto id : known_ids)
+        printf("known id: 0x%08x \n", id);
 
-			float* intensityTexture = &intensityTexture_vec[0];
+    // At this point we have a list of accessible physical nvidia gpus in the system.
+    // Loop over all gpus
+    for (gpu = 0; gpu < gpuCount; gpu++) {
+        NvU32 dispIdCount = 0;
 
-			intensityData.version           = NV_SCANOUT_INTENSITY_DATA_VER;
-			intensityData.width             = 1920;
-			intensityData.height            = 1080;
-			intensityData.blendingTexture   = intensityTexture;
+        // Query the active physical display connected to each gpu.
+        error = NvAPI_GPU_GetConnectedDisplayIds(nvGPUHandles[gpu], NULL, &dispIdCount, 0);
+        printf("Display count %d\n", dispIdCount);
+        if ((error != NVAPI_OK) || (dispIdCount == 0)) {
+            NvAPI_GetErrorMessage(error, estring);
+            printf("NvAPI_GPU_GetConnectedDisplayIds: %s\n", estring);
+            return error;
+        }
 
-			// do not want to use an offset texture
-			intensityData.offsetTexture		= NULL;
-			intensityData.offsetTexChannels = 1;
+        NV_GPU_DISPLAYIDS *dispIds = NULL;
+        dispIds = new NV_GPU_DISPLAYIDS[dispIdCount];
+        dispIds->version = NV_GPU_DISPLAYIDS_VER;
+        error = NvAPI_GPU_GetConnectedDisplayIds(nvGPUHandles[gpu], dispIds, &dispIdCount, 0);
+        if (error != NVAPI_OK) {
+            delete[] dispIds;
+            NvAPI_GetErrorMessage(error, estring);
+            printf("NvAPI_GPU_GetConnectedDisplayIds: %s\n", estring);
+            return error;
+        }
 
-			// this call does the intensity map
-			error =  NvAPI_GPU_SetScanoutIntensity(dispIds[dispIndex].displayId, &intensityData, &sticky);
+        //for (NvU32 dispIndex = 0; (dispIndex < dispIdCount) && dispIds[dispIndex].isActive; dispIndex++)
+        for (NvU32 dispIndex = 0; dispIndex < dispIdCount; dispIndex++) {
+            NV_SCANOUT_INFORMATION scanInfo;
 
-			if (error != NVAPI_OK)  
-			{
-				NvAPI_GetErrorMessage(error, estring);
-				printf("NvAPI_GPU_SetScanoutIntensity: %s\n", estring);
-			} 
+            ZeroMemory(&scanInfo, sizeof(NV_SCANOUT_INFORMATION));
+            scanInfo.version = NV_SCANOUT_INFORMATION_VER;
 
-		} //end of for displays
-		
-		delete [] dispIds;
+            printf("GPU %d, displayId 0x%08x\n", gpu, dispIds[dispIndex].displayId);
+            std::cout << "active: " << dispIds[dispIndex].isActive << std::endl;
+        }
+        printf("next gpu\n");
+    }
 
-	} //end of loop gpus
+    printf("scanning completed\n\n");
+
+    for (gpu = 0; gpu < gpuCount; gpu++) {
+        NvU32 dispIdCount = 0;
+
+        // Query the active physical display connected to each gpu.
+        error = NvAPI_GPU_GetConnectedDisplayIds(nvGPUHandles[gpu], NULL, &dispIdCount, 0);
+        if ((error != NVAPI_OK) || (dispIdCount == 0)) {
+            NvAPI_GetErrorMessage(error, estring);
+            printf("NvAPI_GPU_GetConnectedDisplayIds: %s\n", estring);
+            printf("Display count %d\n", dispIdCount);
+            return error;
+        }
+
+        NV_GPU_DISPLAYIDS *dispIds = NULL;
+        dispIds = new NV_GPU_DISPLAYIDS[dispIdCount];
+        dispIds->version = NV_GPU_DISPLAYIDS_VER;
+
+        error = NvAPI_GPU_GetConnectedDisplayIds(nvGPUHandles[gpu], dispIds, &dispIdCount, 0);
+        if (error != NVAPI_OK) {
+            delete[] dispIds;
+            NvAPI_GetErrorMessage(error, estring);
+            printf("NvAPI_GPU_GetConnectedDisplayIds: %s\n", estring);
+            return error;
+        }
+
+        // Loop through all the displays
+        for (NvU32 dispIndex = 0; (dispIndex < dispIdCount) && dispIds[dispIndex].isActive; dispIndex++) {
+            printf("trying id: 0x%08x \n", dispIds[dispIndex].displayId);
+            if (std::count(known_ids.begin(), known_ids.end(), static_cast<std::size_t>(dispIds[dispIndex].displayId))
+                    == 0) {
+                printf("not in the known list\n");
+                continue;
+            }
+
+            NV_SCANOUT_INFORMATION scanInfo;
+
+            ZeroMemory(&scanInfo, sizeof(NV_SCANOUT_INFORMATION));
+            scanInfo.version = NV_SCANOUT_INFORMATION_VER;
+
+            printf("GPU %d, displayId 0x%08x\n", gpu, dispIds[dispIndex].displayId);
+
+            // Query the desktop size and display location in it
+            error = NvAPI_GPU_GetScanoutConfigurationEx(dispIds[dispIndex].displayId, &scanInfo);
+            if (error != NVAPI_OK) {
+                NvAPI_GetErrorMessage(error, estring);
+                printf("NvAPI_GPU_GetScanoutConfiguration: %s\n", estring);
+                return error;
+            }
+
+            // Desktop -- the size & location of the virtual desktop in Windows, in a Mosaic this will include all displays and overalp
+            printf("DesktopRect: sX = %6d, sY = %6d, sWidth = %6d sHeight = %6d\n", scanInfo.sourceDesktopRect.sX,
+                    scanInfo.sourceDesktopRect.sY, scanInfo.sourceDesktopRect.sWidth,
+                    scanInfo.sourceDesktopRect.sHeight);
+
+            // source Viewport -- where in the desktop this selected display is
+            printf("ViewportRect: sX = %6d, sY = %6d, sWidth = %6d sHeight = %6d\n", scanInfo.sourceViewportRect.sX,
+                    scanInfo.sourceViewportRect.sY, scanInfo.sourceViewportRect.sWidth,
+                    scanInfo.sourceViewportRect.sHeight);
+
+            // What resolution is the display
+            printf("Display Scanout Rect: sX = %6d, sY = %6d, sWidth = %6d sHeight = %6d\n",
+                    scanInfo.targetViewportRect.sX, scanInfo.targetViewportRect.sY, scanInfo.targetViewportRect.sWidth,
+                    scanInfo.targetViewportRect.sHeight);
+
+            // texture coordinates
+            // Computing the texture coordinates is different if we are in Mosaic vs extended displays, so check to see if Mosaic is running
+            NV_MOSAIC_TOPO_BRIEF topo;
+            topo.version = NVAPI_MOSAIC_TOPO_BRIEF_VER;
+
+            NV_MOSAIC_DISPLAY_SETTING dispSetting;
+            dispSetting.version = NVAPI_MOSAIC_DISPLAY_SETTING_VER;
+
+            NvS32 overlapX, overlapY;
+
+            // Query the current Mosaic topology
+            error = NvAPI_Mosaic_GetCurrentTopo(&topo, &dispSetting, &overlapX, &overlapY);
+            if (error != NVAPI_OK) {
+                NvAPI_GetErrorMessage(error, estring);
+                printf("NvAPI_GPU_GetCurrentTopo: %s\n", estring);
+                return error;
+            }
+
+            int desktop = gpu;  // TEMPORARY for TRIP4 installation only - each GPU has one separate mosaic desktop
+            int row = locationsOfDisplay[dispIds[dispIndex].displayId].first;
+            int col = locationsOfDisplay[dispIds[dispIndex].displayId].second;
+
+            printf("Warping projector at ROW: %d, COL: %d\n", row, col);
+
+            // warp vertices are defined in scanoutRect coordinates
+            auto scanoutRect = scanInfo.targetViewportRect;
+
+            float dstWidth = scanoutRect.sWidth / 2.0f;
+            float dstHeight = scanoutRect.sHeight;
+            float dstXShift = dstWidth / 2.0f;
+            float dstYShift = dstHeight / 2.0f;
+            float dstLeft = (float) scanoutRect.sX + dstXShift;
+            float dstTop = (float) scanoutRect.sY;
+
+            // Triangle strip with 4 vertices
+            // The vertices are given as a 2D vertex strip because the warp
+            // is a 2d operation. To be able to emulate 3d perspective correction,
+            // the texture coordinate contains 4 components, which needs to be
+            // adjusted to get this correction.
+            //
+            // A trapezoid needs 4 vertices.
+            // Format is xy for the vertex + yurq for the texture coordinate.
+            // So we need 24 floats for that.
+            //float vertices [4*6];
+            //
+            //  (0)  ----------------  (2)
+            //       |             / |
+            //       |            /  |
+            //       |           /   |
+            //       |          /    |
+            //       |         /     |
+            //       |        /      |
+            //       |       /       |
+            //       |      /        |
+            //       |     /         |
+            //       |    /          |
+            //       |   /           |
+            //       |  /            |
+            //       | /             |
+            //   (1) |---------------- (3)
+            //
+
+            // texture coordinates
+            // warp texture coordinates are defined in desktopRect coordinates
+
+            auto desktopRect = scanInfo.sourceDesktopRect;
+            float srcLeft = (float) desktopRect.sX;
+            float srcTop = (float) desktopRect.sY;
+            float srcWidth = desktopRect.sWidth;
+            float srcHeight = desktopRect.sHeight;
+
+            RectCoords target_coords = read_warping_vertices(gpu, row, col);
+
+            std::vector<float> vertices = get_warping_vertices(srcLeft, srcTop, srcWidth, srcHeight, target_coords);
+            warp_display(scanInfo, vertices, warpingData);
+            cout << "Initial warp finished." << endl;
+
+            char c = ' ';
+            while (c != 'q') {
+                cout >> "Select vertex (0 = TL, 1 = BL, 2 = TR, 3 = BR, q = EXIT): ";
+                cin << c;
+                Vector2f &vertex;
+                switch (c) {
+                case '0':
+                    vertex = target_coords.tl;
+                    break;
+                case '1':
+                    vertex = target_coords.tr;
+                    break;
+                case '2':
+                    vertex = target_coords.bl;
+                    break;
+                case '3':
+                    vertex = target_coords.br;
+                    break;
+                default:
+                    continue;
+                }
+                move_vertex(vertex);
+                cout << "Warping vertex " << c << " to " << vertex << endl;
+                std::vector<float> vertices = get_warping_vertices(srcLeft, srcTop, srcWidth, srcHeight, target_coords);
+                warp_display(scanInfo, vertices, warpingData);
+            }
+
+            /*
+             // -----------------------------------------------------------------------------
+             // BLENDING
+             // -----------------------------------------------------------------------------
+
+             NV_SCANOUT_INTENSITY_DATA intensityData;
+
+             image.clear();
+             string blend_filename = "blend_(" + to_string(row) + ", " + to_string(col) + ").png";
+             unsigned lodePng_error = lodepng::decode(image, width, height, blend_filename);
+             if (lodePng_error) printf("LODEPNG ERROR %s\n ", lodepng_error_text(lodePng_error));
+
+             // copy values from png, skip every 4th value - we don't want the alpha channel
+             std::vector<float> intensityTexture_vec;
+             for (int i = 0; i < image.size(); i++) {
+             if ((i + 1) % 4 != 0) {
+             intensityTexture_vec.push_back(image[i] / 255.0f);
+             }
+             }
+
+             float* intensityTexture = &intensityTexture_vec[0];
+
+             intensityData.version = NV_SCANOUT_INTENSITY_DATA_VER;
+             intensityData.width = 1920;
+             intensityData.height = 1080;
+             intensityData.blendingTexture = intensityTexture;
+
+             // do not want to use an offset texture
+             intensityData.offsetTexture = NULL;
+             intensityData.offsetTexChannels = 1;
+
+             // this call does the intensity map
+             error = NvAPI_GPU_SetScanoutIntensity(dispIds[dispIndex].displayId, &intensityData, &sticky);
+
+             if (error != NVAPI_OK)
+             {
+             NvAPI_GetErrorMessage(error, estring);
+             printf("NvAPI_GPU_SetScanoutIntensity: %s\n", estring);
+             return error;
+             }
+             */
+
+        } //end of for displays
+
+        delete[] dispIds;
+
+    } //end of loop gpus
 
 }
 
-
-
-	 
