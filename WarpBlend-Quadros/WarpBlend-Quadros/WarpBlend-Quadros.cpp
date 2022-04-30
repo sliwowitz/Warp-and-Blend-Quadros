@@ -40,6 +40,31 @@ struct RectCoords {
 
 vector<float> get_warping_vertices(float srcLeft, float srcTop, float srcWidth, float srcHeight, RectCoords tgt) {
 
+
+    // find intersection between diagonals
+    Hyperplane<float,2> tl_br = Hyperplane<float,2>::Through(tgt.tl,tgt.br);
+    Hyperplane<float,2> tr_bl = Hyperplane<float,2>::Through(tgt.tr,tgt.bl);
+    Vector2f intersection = tl_br.intersection(tr_bl);
+
+    // quadrilateral projective interpolation
+    // FIXME: this isn't working, non-continuous seams
+    // see: http://www.reedbeta.com/blog/2012/05/26/quadrilateral-interpolation-part-1/
+
+    // calculate distances from vertices to intersection
+    float d_tl = (tl-intersection).norm();
+    float d_tr = (tr-intersection).norm();
+    float d_bl = (bl-intersection).norm();
+    float d_br = (br-intersection).norm();
+
+    // fourth texture coordinate 'q' plays the role of '1/z' in texturing
+    // FIXME - this projective interpolation does not work across seams
+    // FIXME - we need some sort of bilateral interpolation
+    float q_tl = (d_tl + d_br) / (d_br);
+    float q_tr = (d_tr + d_bl) / (d_bl);
+    float q_bl = (d_bl + d_tr) / (d_tr);
+    float q_br = (d_br + d_tl) / (d_tl);
+
+
     // XYUVRW coordinates to return
     //  (0)  ----------------- (2)
     //       |             / |
@@ -51,10 +76,10 @@ vector<float> get_warping_vertices(float srcLeft, float srcTop, float srcWidth, 
     //       | /             |
     //   (1) ----------------- (3)
 
-    float coords[] = { tgt.tl.x(), tgt.tl.y(), srcLeft, srcTop, 0.0f, 1.0f,   // 0
-            tgt.bl.x(), tgt.bl.y(), srcLeft, (srcTop + srcHeight), 0.0f, 1.0f,   // 1
-            tgt.tr.x(), tgt.tr.y(), srcWidth + srcLeft, srcTop, 0.0f, 1.0f,   // 2
-            tgt.br.x(), tgt.br.y(), srcWidth + srcLeft, (srcTop + srcHeight), 0.0f, 1.0f    // 3
+    float coords[] = { tgt.tl.x(), tgt.tl.y(), srcLeft, srcTop, 0.0f, q_tl,   // 0
+            tgt.bl.x(), tgt.bl.y(), srcLeft, (srcTop + srcHeight), 0.0f, q_bl,   // 1
+            tgt.tr.x(), tgt.tr.y(), srcWidth + srcLeft, srcTop, 0.0f, q_tr,   // 2
+            tgt.br.x(), tgt.br.y(), srcWidth + srcLeft, (srcTop + srcHeight), 0.0f, q_br    // 3
             };
 
     vector<float> coords_vector(coords, coords + sizeof(coords) / sizeof(coords[0]));
