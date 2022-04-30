@@ -38,8 +38,27 @@ struct RectCoords {
 
 };
 
-vector<float> get_warping_vertices(float srcLeft, float srcTop, float srcWidth, float srcHeight, RectCoords tgt) {
+vector<float> get_warping_vertices(float srcLeft, float srcTop, 
+    float srcWidth, float srcHeight, RectCoords target, int rotate = 0) {
 
+    rotate = 2;
+    RectCoords tgt;
+    switch (rotate) {
+    case 1:
+        tgt.tl = target.bl;
+        tgt.bl = target.br;
+        tgt.tr = target.tl;
+        tgt.br = target.tr;
+        break;
+    case 2:
+        tgt.tl = target.tl;
+        tgt.bl = target.tr;
+        tgt.tr = target.bl;
+        tgt.br = target.br;
+        break;
+    default: 
+        tgt = target;
+    }
 
     // find intersection between diagonals
     Hyperplane<float,2> tl_br = Hyperplane<float,2>::Through(tgt.tl,tgt.br);
@@ -64,7 +83,6 @@ vector<float> get_warping_vertices(float srcLeft, float srcTop, float srcWidth, 
     float q_bl = (d_bl + d_tr) / (d_tr);
     float q_br = (d_br + d_tl) / (d_tl);
 
-
     // XYUVRW coordinates to return
     //  (0)  ----------------- (2)
     //       |             / |
@@ -76,13 +94,17 @@ vector<float> get_warping_vertices(float srcLeft, float srcTop, float srcWidth, 
     //       | /             |
     //   (1) ----------------- (3)
 
-    float coords[] = { tgt.tl.x(), tgt.tl.y(), srcLeft, srcTop, 0.0f, q_tl,   // 0
-            tgt.bl.x(), tgt.bl.y(), srcLeft, (srcTop + srcHeight), 0.0f, q_bl,   // 1
-            tgt.tr.x(), tgt.tr.y(), srcWidth + srcLeft, srcTop, 0.0f, q_tr,   // 2
-            tgt.br.x(), tgt.br.y(), srcWidth + srcLeft, (srcTop + srcHeight), 0.0f, q_br    // 3
-            };
+    vector<float> tl{ tgt.tl.x(), tgt.tl.y(), srcLeft * q_tl / 2, srcTop * q_tl / 2, 0.0f, q_tl };
+    vector<float> bl{ tgt.bl.x(), tgt.bl.y(), srcLeft * q_bl / 2, (srcTop + srcHeight) * q_bl / 2, 0.0f, q_bl };
+    vector<float> tr{ tgt.tr.x(), tgt.tr.y(), (srcWidth + srcLeft) * q_tr / 2, srcTop * q_tr / 2,0.0f, q_tr };
+    vector<float> br{ tgt.br.x(), tgt.br.y(), (srcWidth + srcLeft) * q_br / 2, (srcTop + srcHeight) * q_br / 2, 0.0f, q_br };
 
-    vector<float> coords_vector(coords, coords + sizeof(coords) / sizeof(coords[0]));
+    vector<float> coords_vector{};
+    
+    coords_vector.insert(end(coords_vector), begin(tl), end(tl));
+    coords_vector.insert(end(coords_vector), begin(bl), end(bl));
+    coords_vector.insert(end(coords_vector), begin(tr), end(tr));
+    coords_vector.insert(end(coords_vector), begin(br), end(br));
 
     return coords_vector;
 }
@@ -121,13 +143,13 @@ RectCoords read_warping_vertices(int desktop, int row, int col) {
 
 void warp_display(NV_SCANOUT_INFORMATION &scanInfo, NvU32 display_id, vector<float> &vertices,
         NV_SCANOUT_WARPING_DATA &warpingData) {
-    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[0], vertices[1], vertices[2], vertices[3],
+    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.3f, %6.3f\n", vertices[0], vertices[1], vertices[2], vertices[3],
             vertices[4], vertices[5]);
-    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[6], vertices[7], vertices[8], vertices[9],
+    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.3f, %6.3f\n", vertices[6], vertices[7], vertices[8], vertices[9],
             vertices[10], vertices[11]);
-    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[12], vertices[13], vertices[14],
+    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.3f, %6.3f\n", vertices[12], vertices[13], vertices[14],
             vertices[15], vertices[16], vertices[17]);
-    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[18], vertices[19], vertices[20],
+    printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.3f, %6.3f\n", vertices[18], vertices[19], vertices[20],
             vertices[21], vertices[22], vertices[23]);
 
     printf("Warping\n");
