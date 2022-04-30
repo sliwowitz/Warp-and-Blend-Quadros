@@ -94,7 +94,7 @@ RectCoords read_warping_vertices(int desktop, int row, int col) {
     return RectCoords { tl, tr, bl, br };
 }
 
-void warp_display(NV_SCANOUT_INFORMATION const &scanInfo, vector<float> const &vertices,
+void warp_display(NV_SCANOUT_INFORMATION &scanInfo, NvU32 display_id, vector<float> &vertices,
         NV_SCANOUT_WARPING_DATA &warpingData) {
     printf("vertices: %6.0f, %6.0f, %6.0f, %6.0f, %6.0f, %6.0f\n", vertices[0], vertices[1], vertices[2], vertices[3],
             vertices[4], vertices[5]);
@@ -115,8 +115,9 @@ void warp_display(NV_SCANOUT_INFORMATION const &scanInfo, vector<float> const &v
     // This call does the Warp
     int maxNumVertices = 0;
     int sticky = 0;
-    auto error = NvAPI_GPU_SetScanoutWarping(dispIds[dispIndex].displayId, &warpingData, &maxNumVertices, &sticky);
+    auto error = NvAPI_GPU_SetScanoutWarping(display_id, &warpingData, &maxNumVertices, &sticky);
     if (error != NVAPI_OK) {
+        char estring[1024];
         NvAPI_GetErrorMessage(error, estring);
         printf("NvAPI_GPU_SetScanoutWarping: %s\n", estring);
     }
@@ -127,29 +128,36 @@ void warp_display(NV_SCANOUT_INFORMATION const &scanInfo, vector<float> const &v
 }
 
 //TODO: interactivity possible with windows conio.h/getch(), or (better) ncurses
-void move_vertex(Vector2f &vertex) {
+void move_vertex(Vector2f * vertex) {
     char c = ' ';
+    float invalid = 0.0f;
     while (c != 'q') {
-        cout >> "Move along axis (x/y = AXIS, q = EXIT): ";
-        cin << c;
-        float& coord;
+        cout << "Move along axis (x/y = AXIS, q = EXIT): ";
+        cin>> c;
 
         switch (c) {
         case 'x':
-            coord = vertex.x();
             break;
         case 'y':
-            coord = vertex.y();
             break;
         default:
             continue;
         }
 
         float offset = 0;
-        cout >> "Offset: ";
-        cin << offset;
+        cout << "Offset: ";
+        cin >> offset;
 
-        coord += offset;
+        switch (c) {
+        case 'x':
+            vertex->x() += offset;
+            break;
+        case 'y':
+            vertex->y() += offset;
+            break;
+        default:
+            continue;
+        }
     }
 }
 
@@ -301,6 +309,7 @@ int main(int argc, char **argv) {
             dispSetting.version = NVAPI_MOSAIC_DISPLAY_SETTING_VER;
 
             NvS32 overlapX, overlapY;
+            NvU32 display_id = dispIds[dispIndex].displayId;
 
             // Query the current Mosaic topology
             error = NvAPI_Mosaic_GetCurrentTopo(&topo, &dispSetting, &overlapX, &overlapY);
@@ -366,34 +375,34 @@ int main(int argc, char **argv) {
             RectCoords target_coords = read_warping_vertices(gpu, row, col);
 
             std::vector<float> vertices = get_warping_vertices(srcLeft, srcTop, srcWidth, srcHeight, target_coords);
-            warp_display(scanInfo, vertices, warpingData);
+            warp_display(scanInfo, display_id, vertices, warpingData);
             cout << "Initial warp finished." << endl;
 
             char c = ' ';
             while (c != 'q') {
-                cout >> "Select vertex (0 = TL, 1 = BL, 2 = TR, 3 = BR, q = EXIT): ";
-                cin << c;
-                Vector2f &vertex;
+                cout << "Select vertex (0 = TL, 1 = BL, 2 = TR, 3 = BR, q = EXIT): ";
+                cin >> c;
+                Vector2f * vertex = nullptr;
                 switch (c) {
                 case '0':
-                    vertex = target_coords.tl;
+                    vertex = &target_coords.tl;
                     break;
                 case '1':
-                    vertex = target_coords.tr;
+                    vertex = &target_coords.tr;
                     break;
                 case '2':
-                    vertex = target_coords.bl;
+                    vertex = &target_coords.bl;
                     break;
                 case '3':
-                    vertex = target_coords.br;
+                    vertex = &target_coords.br;
                     break;
                 default:
                     continue;
                 }
                 move_vertex(vertex);
-                cout << "Warping vertex " << c << " to " << vertex << endl;
+                cout << "Warping vertex " << c << " to " << vertex->transpose() << endl;
                 std::vector<float> vertices = get_warping_vertices(srcLeft, srcTop, srcWidth, srcHeight, target_coords);
-                warp_display(scanInfo, vertices, warpingData);
+                warp_display(scanInfo, display_id, vertices, warpingData);
             }
 
             /*

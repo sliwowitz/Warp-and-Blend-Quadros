@@ -74,7 +74,7 @@
     <TargetName>$(ProjectName)_$(Platform)</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <LinkIncremental>true</LinkIncremental>
+    <LinkIncremental>false</LinkIncremental>
     <OutDir>$(SolutionDir)..\build\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)..\obj\$(ProjectName)\$(Platform)\$(Configuration)</IntDir>
     <TargetName>$(ProjectName)_$(Platform)</TargetName>
@@ -119,7 +119,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)../libs/amd64</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>C:\R470-developer\amd64;$(SolutionDir)../libs/amd64</AdditionalLibraryDirectories>
       <AdditionalDependencies>nvapi64.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
@@ -159,7 +159,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>$(SolutionDir)../libs/amd64</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>C:\R470-developer\amd64;$(SolutionDir)../libs/amd64</AdditionalLibraryDirectories>
       <AdditionalDependencies>nvapi64.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
