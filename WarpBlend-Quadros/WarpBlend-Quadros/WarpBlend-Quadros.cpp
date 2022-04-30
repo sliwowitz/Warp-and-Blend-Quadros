@@ -51,10 +51,10 @@ vector<float> get_warping_vertices(float srcLeft, float srcTop, float srcWidth, 
     // see: http://www.reedbeta.com/blog/2012/05/26/quadrilateral-interpolation-part-1/
 
     // calculate distances from vertices to intersection
-    float d_tl = (tl-intersection).norm();
-    float d_tr = (tr-intersection).norm();
-    float d_bl = (bl-intersection).norm();
-    float d_br = (br-intersection).norm();
+    float d_tl = (tgt.tl-intersection).norm();
+    float d_tr = (tgt.tr-intersection).norm();
+    float d_bl = (tgt.bl-intersection).norm();
+    float d_br = (tgt.br-intersection).norm();
 
     // fourth texture coordinate 'q' plays the role of '1/z' in texturing
     // FIXME - this projective interpolation does not work across seams
