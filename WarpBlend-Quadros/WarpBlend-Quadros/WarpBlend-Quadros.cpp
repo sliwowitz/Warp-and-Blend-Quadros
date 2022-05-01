@@ -464,13 +464,14 @@ int main(int argc, char **argv) {
                 cout << "non-interactive mode (add any command line parameter to run interactively)" << endl;
             }
 
-            /*
+            
              // -----------------------------------------------------------------------------
              // BLENDING
              // -----------------------------------------------------------------------------
 
              NV_SCANOUT_INTENSITY_DATA intensityData;
 
+             /*
              image.clear();
              string blend_filename = "blend_(" + to_string(row) + ", " + to_string(col) + ").png";
              unsigned lodePng_error = lodepng::decode(image, width, height, blend_filename);
@@ -483,12 +484,52 @@ int main(int argc, char **argv) {
              intensityTexture_vec.push_back(image[i] / 255.0f);
              }
              }
+             */
 
+             cout << endl << "BLEDNING" << endl;
+             std::vector<float> intensityTexture_vec;
+             intensityTexture_vec.resize(1280 * 800 * 3);
+             int overlap = 300;
+             int offset = 150;
+             if (row == 0) {
+                 cout << "full intensity" << endl;
+                 fill(begin(intensityTexture_vec), end(intensityTexture_vec), 1.0f);
+             }
+             else {
+                 cout << "blend" << endl;
+                 int i = 0;
+                 for (int y = 0; y < 800; ++y) {
+                     for (int x = 0; x < 1280; ++x) {
+                         for (int color = 0; color < 3; ++color) {
+                             if (y < 400- (overlap + offset) /2) {
+                                 intensityTexture_vec[i] = (col ? 0.0f : 1.0f);
+                             }
+                             else if (y > 400+ (overlap + offset) /2) {
+                                 intensityTexture_vec[i] = (col ? 1.0f : 0.0f);
+                             }
+                             else {
+                                 if (col) {
+                                     float v =
+                                         ((float)y - (float)(400 - (overlap+offset) / 2)) / (float)overlap;
+                                     intensityTexture_vec[i] = max(min(v, 1.0f), 0.0f);
+                                 }
+                                 else {
+                                     float v =
+                                         1.0f - ((float)y - (float)(400 - (overlap-offset) / 2)) / (float)overlap;
+                                     intensityTexture_vec[i] = max(min(v, 1.0f), 0.0f);
+                                 }
+                             }
+                             i++;
+                         }
+                     }
+                 }
+             }
+             cout << intensityTexture_vec.size() << endl;
              float* intensityTexture = &intensityTexture_vec[0];
 
              intensityData.version = NV_SCANOUT_INTENSITY_DATA_VER;
-             intensityData.width = 1920;
-             intensityData.height = 1080;
+             intensityData.width = 1280;
+             intensityData.height = 800;
              intensityData.blendingTexture = intensityTexture;
 
              // do not want to use an offset texture
@@ -496,15 +537,16 @@ int main(int argc, char **argv) {
              intensityData.offsetTexChannels = 1;
 
              // this call does the intensity map
+             int sticky = 0;
              error = NvAPI_GPU_SetScanoutIntensity(dispIds[dispIndex].displayId, &intensityData, &sticky);
-
+             cout << "done" << endl;
              if (error != NVAPI_OK)
              {
              NvAPI_GetErrorMessage(error, estring);
              printf("NvAPI_GPU_SetScanoutIntensity: %s\n", estring);
              return error;
              }
-             */
+             
 
         } //end of for displays
 
