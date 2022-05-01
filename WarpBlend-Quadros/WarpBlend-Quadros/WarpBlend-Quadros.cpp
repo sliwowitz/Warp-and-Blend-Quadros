@@ -94,10 +94,10 @@ vector<float> get_warping_vertices(float srcLeft, float srcTop,
     //       | /             |
     //   (1) ----------------- (3)
 
-    vector<float> tl{ tgt.tl.x(), tgt.tl.y(), srcLeft * q_tl / 2, srcTop * q_tl / 2, 0.0f, q_tl };
-    vector<float> bl{ tgt.bl.x(), tgt.bl.y(), srcLeft * q_bl / 2, (srcTop + srcHeight) * q_bl / 2, 0.0f, q_bl };
-    vector<float> tr{ tgt.tr.x(), tgt.tr.y(), (srcWidth + srcLeft) * q_tr / 2, srcTop * q_tr / 2,0.0f, q_tr };
-    vector<float> br{ tgt.br.x(), tgt.br.y(), (srcWidth + srcLeft) * q_br / 2, (srcTop + srcHeight) * q_br / 2, 0.0f, q_br };
+    vector<float> tl{ tgt.tl.x(), tgt.tl.y(), srcLeft * q_tl / 2, srcTop * q_tl / 2, 0.0f, q_tl /2};
+    vector<float> bl{ tgt.bl.x(), tgt.bl.y(), srcLeft * q_bl / 2, (srcTop + srcHeight) * q_bl / 2, 0.0f, q_bl /2};
+    vector<float> tr{ tgt.tr.x(), tgt.tr.y(), (srcWidth + srcLeft) * q_tr / 2, srcTop * q_tr / 2,0.0f, q_tr /2};
+    vector<float> br{ tgt.br.x(), tgt.br.y(), (srcWidth + srcLeft) * q_br / 2, (srcTop + srcHeight) * q_br / 2, 0.0f, q_br /2};
 
     vector<float> coords_vector{};
     
@@ -209,6 +209,11 @@ void move_vertex(Vector2f * vertex) {
 }
 
 int main(int argc, char **argv) {
+    bool interactive = false;
+    if (argc > 1) {
+        interactive = true;
+    }
+
     NvAPI_Status error;
     NvPhysicalGpuHandle nvGPUHandles[NVAPI_MAX_PHYSICAL_GPUS];
     NvU32 gpuCount = 0;
@@ -421,35 +426,42 @@ int main(int argc, char **argv) {
 
             RectCoords target_coords = read_warping_vertices(gpu, row, col);
 
+            printf("Warping projector at ROW: %d, COL: %d\n", row, col);
             std::vector<float> vertices = get_warping_vertices(srcLeft, srcTop, srcWidth, srcHeight, target_coords);
             warp_display(scanInfo, display_id, vertices, warpingData);
             cout << "Initial warp finished." << endl;
 
-            char c = ' ';
-            while (c != 'q') {
-                cout << "Select vertex (0 = TL, 1 = BL, 2 = TR, 3 = BR, q = EXIT): ";
-                cin >> c;
-                Vector2f * vertex = nullptr;
-                switch (c) {
-                case '0':
-                    vertex = &target_coords.tl;
-                    break;
-                case '1':
-                    vertex = &target_coords.tr;
-                    break;
-                case '2':
-                    vertex = &target_coords.bl;
-                    break;
-                case '3':
-                    vertex = &target_coords.br;
-                    break;
-                default:
-                    continue;
+            if (interactive) {
+                char c = ' ';
+                while (c != 'q') {
+                    cout << "Select vertex (0 = TL, 1 = BL, 2 = TR, 3 = BR, q = EXIT): ";
+                    cin >> c;
+                    Vector2f* vertex = nullptr;
+                    switch (c) {
+                    case '0':
+                        vertex = &target_coords.tl;
+                        break;
+                    case '1':
+                        vertex = &target_coords.tr;
+                        break;
+                    case '2':
+                        vertex = &target_coords.bl;
+                        break;
+                    case '3':
+                        vertex = &target_coords.br;
+                        break;
+                    default:
+                        continue;
+                    }
+                    move_vertex(vertex);
+                    printf("Warping projector at ROW: %d, COL: %d\n", row, col);
+                    cout << "Warping vertex " << c << " to " << vertex->transpose() << endl;
+                    std::vector<float> vertices = get_warping_vertices(srcLeft, srcTop, srcWidth, srcHeight, target_coords);
+                    warp_display(scanInfo, display_id, vertices, warpingData);
                 }
-                move_vertex(vertex);
-                cout << "Warping vertex " << c << " to " << vertex->transpose() << endl;
-                std::vector<float> vertices = get_warping_vertices(srcLeft, srcTop, srcWidth, srcHeight, target_coords);
-                warp_display(scanInfo, display_id, vertices, warpingData);
+            }
+            else {
+                cout << "non-interactive mode (add any command line parameter to run interactively)" << endl;
             }
 
             /*
